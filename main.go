@@ -77,6 +77,8 @@ func run(c *cli.Context) error {
 	// This is needed to be able to share `b` between compiled and interpreted code
 	var b *bot.Bot
 	imports.Packages["github.com/kf5grd/funcy"].Binds["b"] = reflect.ValueOf(b).Elem()
+	interp.ImportPackage("funcy", "github.com/kf5grd/funcy")
+	interp.ChangePackage("funcy", "github.com/kf5grd/funcy")
 
 	// Create the bot object and set some basic options
 	b = bot.New("", keybase.SetHomePath(c.String("home")))
