@@ -76,7 +76,7 @@ func run(c *cli.Context) error {
 
 	// This is needed to be able to share `b` between compiled and interpreted code
 	var b *bot.Bot
-	imports.Packages["github.com/kf5grd/funcy"].Binds["b"] = reflect.ValueOf(b).Elem()
+	imports.Packages["github.com/kf5grd/funcy"].Binds["b"] = reflect.ValueOf(&b).Elem()
 	interp.ImportPackage("funcy", "github.com/kf5grd/funcy")
 	interp.ChangePackage("funcy", "github.com/kf5grd/funcy")
 
@@ -93,7 +93,7 @@ func run(c *cli.Context) error {
 	// Set initialize the bot's commands
 	b.Commands = []bot.BotCommand{
 		{
-			Name: "GetLinks",
+			Name: "eval",
 			Ad: &chat1.UserBotCommandInput{
 				Name:        "eval",
 				Usage:       "<expr>",
