@@ -3,8 +3,8 @@ package main
 import (
 	"strings"
 
-	"github.com/cosmos72/gomacro/fast"
 	bot "github.com/kf5grd/keybasebot"
+	"github.com/traefik/yaegi/interp"
 	"samhofi.us/x/keybase/v2/types/chat1"
 )
 
@@ -15,22 +15,22 @@ func cmdEval(m chat1.MsgSummary, b *bot.Bot) (bool, error) {
 
 	defer func() {
 		if r := recover(); r != nil {
+			b.Logger.Error("Recovered from panic: %s", r)
 			b.KB.ReactByConvID(m.ConvID, m.Id, ":no_entry_sign:")
 		}
 	}()
 
 	b.Logger.Debug("Evaluating: %s", cmd)
-	interp := b.Meta["interp"].(*fast.Interp)
-	vals, _ := interp.Eval(cmd)
-	b.KB.ReactByConvID(m.ConvID, m.Id, ":white_check_mark:")
-
-	if len(vals) == 0 {
+	i := b.Meta["interp"].(*interp.Interpreter)
+	val, err := i.Eval(cmd)
+	if err != nil {
+		b.KB.ReactByConvID(m.ConvID, m.Id, ":no_entry_sign:")
+		b.KB.ReplyByConvID(m.ConvID, m.Id, "Error: %v", err)
 		return true, nil
 	}
-
-	for _, val := range vals {
+	b.KB.ReactByConvID(m.ConvID, m.Id, ":white_check_mark:")
+	if val.Interface() != nil {
 		b.KB.SendMessageByConvID(m.ConvID, "%v", val)
 	}
-
 	return true, nil
 }

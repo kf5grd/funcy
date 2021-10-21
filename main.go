@@ -1,17 +1,22 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"reflect"
+	"strings"
 
-	"github.com/cosmos72/gomacro/fast"
-	"github.com/cosmos72/gomacro/imports"
+	"github.com/traefik/yaegi/interp"
+	"github.com/traefik/yaegi/stdlib"
+	"github.com/traefik/yaegi/stdlib/syscall"
+	"github.com/traefik/yaegi/stdlib/unrestricted"
+	"github.com/traefik/yaegi/stdlib/unsafe"
 	"github.com/urfave/cli/v2"
 
-	"samhofi.us/x/keybase/v2"
 	"samhofi.us/x/keybase/v2/types/chat1"
 
 	bot "github.com/kf5grd/keybasebot"
+	"github.com/kf5grd/keybasebot/pkg/util"
 )
 
 // Current version
@@ -20,15 +25,7 @@ var version string
 // Exit code on failure
 const exitFail = 1
 
-func init() {
-	imports.Packages["github.com/kf5grd/funcy"] = imports.Package{
-		Binds:    map[string]reflect.Value{},
-		Types:    map[string]reflect.Type{},
-		Proxies:  map[string]reflect.Type{},
-		Untypeds: map[string]string{},
-		Wrappers: map[string][]string{},
-	}
-}
+var Symbols = make(map[string]map[string]reflect.Value)
 
 func main() {
 	app := cli.App{
@@ -72,23 +69,62 @@ func main() {
 
 func run(c *cli.Context) error {
 	// Create the Go interpreter
-	interp := fast.New()
+	i := interp.New(interp.Options{GoPath: "./_go"})
+	if err := i.Use(stdlib.Symbols); err != nil {
+		panic(err)
+	}
+	if err := i.Use(syscall.Symbols); err != nil {
+		panic(err)
+	}
+	if err := i.Use(unsafe.Symbols); err != nil {
+		panic(err)
+	}
+	if err := i.Use(unrestricted.Symbols); err != nil {
+		panic(err)
+	}
+	if err := i.Use(interp.Symbols); err != nil {
+		panic(err)
+	}
+	if err := i.Use(Symbols); err != nil {
+		panic(err)
+	}
+	i.ImportUsed()
 
-	// This is needed to be able to share `b` between compiled and interpreted code
-	var b *bot.Bot
-	imports.Packages["github.com/kf5grd/funcy"].Binds["b"] = reflect.ValueOf(&b).Elem()
-	interp.ImportPackage("funcy", "github.com/kf5grd/funcy")
-	interp.ChangePackage("funcy", "github.com/kf5grd/funcy")
+	// import some initial packages and create the bot object within the context of the interpreter
+	_, err := i.Eval(fmt.Sprintf(`
+          import(
+            "samhofi.us/x/keybase/v2"
+            "samhofi.us/x/keybase/v2/types/chat1"
+            "github.com/kf5grd/keybasebot/pkg/util"
+            bot "github.com/kf5grd/keybasebot"
+          )
+          var b = bot.New("", keybase.SetHomePath(%q))
+        `, c.String("home")))
+	if err != nil {
+		panic(err)
+	}
 
-	// Create the bot object and set some basic options
-	b = bot.New("", keybase.SetHomePath(c.String("home")))
+	v, err := i.Eval("b")
+	if err != nil {
+		panic(err)
+	}
+
+	b, ok := v.Interface().(*bot.Bot)
+	if !ok {
+		fmt.Println("unable to create bot")
+		os.Exit(1)
+	}
+
 	b.LogWriter = c.App.Writer
 	b.Debug = c.Bool("debug")
 	b.JSON = c.Bool("json")
 
-	b.Meta["interp"] = interp
+	b.Meta["interp"] = i
 
 	botOwner := c.String("bot-owner")
+	b.Meta["botOwner"] = botOwner
+	b.Meta["whitelist"] = []string{botOwner}
+	b.Meta["UsersFromMeta"] = UsersFromMeta
 
 	// Set initialize the bot's commands
 	b.Commands = []bot.BotCommand{
@@ -100,9 +136,9 @@ func run(c *cli.Context) error {
 				Description: "Evaluate a Go expression",
 			},
 			Run: bot.Adapt(cmdEval,
+				UsersFromMeta("whitelist"),
 				bot.MessageType("text"),
 				bot.CommandPrefix("!eval"),
-				bot.FromUser(botOwner),
 			),
 		},
 	}
@@ -111,4 +147,22 @@ func run(c *cli.Context) error {
 	b.Run()
 
 	return nil
+}
+
+func UsersFromMeta(key string) bot.Adapter {
+	return func(botAction bot.BotAction) bot.BotAction {
+		return func(m chat1.MsgSummary, b *bot.Bot) (bool, error) {
+			users, ok := b.Meta[key].([]string)
+			if !ok {
+				return false, nil
+			}
+			b.Logger.Debug("Verifying received message was sent by one of '%s'", strings.Join(users, ","))
+			if !util.StringInSlice(m.Sender.Username, users) {
+				b.Logger.Debug("Received message was sent by '%s', exiting command", m.Sender.Username)
+				return false, nil
+			}
+			b.Logger.Debug("Received message was sent by '%s', continuing", m.Sender.Username)
+			return botAction(m, b)
+		}
+	}
 }
